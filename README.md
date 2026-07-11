@@ -12,10 +12,11 @@
 
 ## 首次使用
 
-1. 打开 App，点击“安装 / 更新 Codex Hooks”。
-2. 在 Codex 的 Hooks 管理界面审阅并信任标为 `Codex Sleep Watcher` 的四个 Hook；如果列表没有刷新，重启 Codex。
-3. 启动一个或多个 Codex 任务，在菜单栏中点击刷新并选择观测目标。
-4. 需要停止时点击“取消观测”，防休眠断言会立即释放。
+1. 首次打开 App 会出现欢迎窗口；以后可从菜单栏月亮图标的“使用说明…”再次查看。
+2. 点击“安装 / 更新 Codex Hooks”。
+3. 在 Codex 的 Hooks 管理界面审阅并信任标为 `Codex Sleep Watcher` 的四个 Hook；如果列表没有刷新，重启 Codex。
+4. 在菜单栏中点击刷新，从最近 20 个 Codex 会话中选择观测目标。App Server 负责发现会话，Hooks 负责更新运行、等待授权和停止状态。
+5. 需要停止时点击“取消观测”，防休眠断言会立即释放。
 
 移动 App 后需要再次点击“安装 / 更新 Codex Hooks”，因为 Hook 使用 App 内帮助程序的绝对路径。
 
@@ -24,6 +25,12 @@
 Hook 只转发事件名称、`session_id`、`turn_id`、工作目录和时间。工具不会转发或保存 prompt、助手回复和 transcript 内容；不连接外部网络。身份或事件状态不明确时采用安全失败，不触发休眠。
 
 开发调试时可使用：
+
+```zsh
+swift run CodexSleepWatcherApp
+```
+
+该命令默认使用真实休眠。仅当需要避免休眠时才使用已经打包的调试参数：
 
 ```zsh
 open "dist/Codex Sleep Watcher.app" --args --disable-real-sleep
