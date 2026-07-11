@@ -19,11 +19,12 @@ struct CoreTestRunner {
         try targetRestartCancelsCountdown()
         try waitForOthersDefersCountdown()
         try observationErrorsFailSafe()
-        try appServerDecoding()
+        try recentSessionDiscoveryIncludesUnloadedThreads()
         try hookEventPrivacyAndSocketRoundTrip()
         try hookInstallerPreservesExistingEntries()
         try await sessionRegistryReconcilesEvents()
-        print("PASS: 8 core tests")
+        try await sessionRegistryPreservesSelectedSession()
+        print("PASS: 9 core tests")
     }
 
     static let target = SessionID("target")
@@ -67,12 +68,12 @@ struct CoreTestRunner {
         try expect(machine.lastError == "event stream disconnected", "observation error was not retained")
     }
 
-    static func appServerDecoding() throws {
-        let json = #"{"data":[{"id":"thread-a","sessionId":"session-a","name":"Build app","cwd":"/repo/a","createdAt":1,"updatedAt":2,"status":{"type":"active","activeFlags":[]},"source":"appServer","modelProvider":"openai","cliVersion":"1","ephemeral":false,"turns":[],"preview":"ignored"}],"nextCursor":null}"#
+    static func recentSessionDiscoveryIncludesUnloadedThreads() throws {
+        let json = #"{"data":[{"id":"thread-a","sessionId":"session-a","name":"Build app","cwd":"/repo/a","updatedAt":2,"status":{"type":"active","activeFlags":[]}},{"id":"thread-b","sessionId":"session-b","name":"Review app","cwd":"/repo/b","updatedAt":3,"status":{"type":"notLoaded"}},{"id":"thread-c","sessionId":"session-c","name":"Idle app","cwd":"/repo/c","updatedAt":1,"status":{"type":"idle"}}],"nextCursor":null}"#
         let response = try JSONDecoder().decode(ThreadListResponse.self, from: Data(json.utf8))
-        let sessions = SessionDiscoveryService.mapActiveThreads(response.data)
-        try expect(sessions.first?.id == SessionID("session-a"), "thread/list did not map sessionId")
-        try expect(sessions.first?.name == "Build app", "thread/list lost display name")
+        let sessions = SessionDiscoveryService.mapRecentThreads(response.data, limit: 2)
+        try expect(sessions.map(\.id) == [SessionID("session-b"), SessionID("session-a")], "recent thread mapping filtered or misordered candidates")
+        try expect(sessions.first?.status == .unknown, "notLoaded thread did not map to unknown status")
     }
 
     static func hookEventPrivacyAndSocketRoundTrip() throws {
@@ -111,7 +112,18 @@ struct CoreTestRunner {
         let summary = SessionSummary(id: SessionID("s1"), threadID: "thread-1", name: "Task", cwd: "/repo", updatedAt: Date(timeIntervalSince1970: 10), status: .running(turnID: nil))
         await registry.refresh(from: [summary])
         await registry.apply(HookEvent(kind: .stop, sessionID: SessionID("s1"), turnID: TurnID("t1"), cwd: "/repo", receivedAt: Date(timeIntervalSince1970: 20)))
+        await registry.refresh(from: [summary])
         let status = await registry.session(id: SessionID("s1"))?.status
         try expect(status == .idle, "newer Stop event did not override snapshot")
+    }
+
+    static func sessionRegistryPreservesSelectedSession() async throws {
+        let registry = SessionRegistry()
+        let selected = SessionSummary(id: SessionID("selected"), threadID: "selected", name: "Selected", cwd: "/selected", updatedAt: Date(timeIntervalSince1970: 1), status: .unknown)
+        await registry.refresh(from: [selected], preserving: nil)
+        let recent = SessionSummary(id: SessionID("recent"), threadID: "recent", name: "Recent", cwd: "/recent", updatedAt: Date(timeIntervalSince1970: 2), status: .unknown)
+        await registry.refresh(from: [recent], preserving: selected.id)
+        let sessions = await registry.sessions()
+        try expect(sessions.map(\.id).contains(selected.id), "refresh removed the selected session")
     }
 }

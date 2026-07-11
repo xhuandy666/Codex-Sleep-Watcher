@@ -19,7 +19,7 @@ public enum SessionStatus: Equatable, Sendable {
     case waitingOnApproval
     case waitingOnUserInput
     case idle
-    case unavailable
+    case unknown
 
     public var isRunning: Bool {
         switch self {
