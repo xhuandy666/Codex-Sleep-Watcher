@@ -32,7 +32,8 @@ struct CoreTestRunner {
         try await sessionStartMarksSessionRunning()
         try await hookReceiverSkipsMalformedDatagrams()
         try concurrentSessionShortIDsAreDistinct()
-        print("PASS: 17 core tests")
+        try codexLocatorSupportsFinderEnvironment()
+        print("PASS: 18 core tests")
     }
 
     static let target = SessionID("target")
@@ -212,5 +213,14 @@ struct CoreTestRunner {
         let first = SessionID("019f521b-9a08-7560-9457-f6c6559709ff")
         let second = SessionID("019f521b-fedd-78b0-b927-a179e0fa6ef0")
         try expect(first.short != second.short, "concurrent UUIDv7 sessions have colliding short IDs")
+    }
+
+    static func codexLocatorSupportsFinderEnvironment() throws {
+        let chatGPTCodex = "/Applications/ChatGPT.app/Contents/Resources/codex"
+        let result = CodexExecutableLocator.locate(
+            environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"],
+            homeDirectory: URL(fileURLWithPath: "/Users/test")
+        ) { $0 == chatGPTCodex }
+        try expect(result?.path == chatGPTCodex, "Finder environment could not locate the Codex bundled with ChatGPT")
     }
 }

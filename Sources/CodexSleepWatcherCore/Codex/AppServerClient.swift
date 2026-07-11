@@ -1,18 +1,22 @@
 import Foundation
 
 public actor AppServerClient {
+    private let executableURL: URL?
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
     private var nextID = 0
     private var responseBuffer = JSONLineBuffer()
 
-    public init() {}
+    public init(executableURL: URL? = CodexExecutableLocator.locate()) {
+        self.executableURL = executableURL
+    }
 
     public func start() throws {
+        guard let executableURL else { throw AppServerClientError.codexExecutableNotFound }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["codex", "app-server", "--stdio"]
+        process.executableURL = executableURL
+        process.arguments = ["app-server", "--stdio"]
         let stdin = Pipe(), stdout = Pipe()
         process.standardInput = stdin; process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
@@ -42,10 +46,30 @@ public actor AppServerClient {
             while let line = responseBuffer.nextLine() {
                 guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
                 if object["id"] as? Int == id, let result = object["result"] { return result }
+                if object["id"] as? Int == id, let error = object["error"] as? [String: Any] {
+                    throw AppServerClientError.serverError(error["message"] as? String ?? "unknown error")
+                }
             }
             guard let data = try output?.read(upToCount: 65_536), !data.isEmpty else { break }
             responseBuffer.append(data)
         }
-        throw CocoaError(.fileReadUnknown)
+        throw AppServerClientError.serverClosed
+    }
+}
+
+public enum AppServerClientError: LocalizedError, Equatable {
+    case codexExecutableNotFound
+    case serverClosed
+    case serverError(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .codexExecutableNotFound:
+            "找不到 Codex。请安装或更新 Codex Desktop App，然后重新启动本工具。"
+        case .serverClosed:
+            "Codex App Server 在初始化完成前退出。"
+        case .serverError(let message):
+            "Codex App Server 错误：\(message)"
+        }
     }
 }
