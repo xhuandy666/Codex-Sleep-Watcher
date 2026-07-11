@@ -2,13 +2,30 @@
 
 一个原生 macOS 菜单栏工具：从多个正在运行的 Codex 会话中选择一个目标，在目标运行期间防止 Mac 空闲休眠，并在目标完成、取消或等待授权后按设定休眠。
 
-## 构建
+## 系统要求
+
+- macOS 13 或更高版本。
+- Codex Desktop App，并且终端可以运行 `codex app-server`。
+- Xcode Command Line Tools（可通过 `xcode-select --install` 安装）。
+
+## 从源码安装
 
 ```zsh
+git clone git@github.com:xhuandy666/Codex-Sleep-Watcher.git
+cd Codex-Sleep-Watcher
 ./Scripts/package_app.sh
 ```
 
-生成的 App 位于 `dist/Codex Sleep Watcher.app`。可直接双击，或复制到 `/Applications`。
+生成的 App 位于 `dist/Codex Sleep Watcher.app`。建议复制到 `/Applications` 后再启动，避免移动 App 导致 Hook 路径失效。
+
+首次启动如果被 Gatekeeper 阻止，请在 Finder 中右键 App，选择“打开”。本项目当前使用本机临时签名，没有 Apple 公证。
+
+## 开发验证
+
+```zsh
+swift run codex-sleep-tests
+swift build
+```
 
 ## 首次使用
 
