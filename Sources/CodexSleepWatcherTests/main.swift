@@ -21,7 +21,8 @@ struct CoreTestRunner {
         try observationErrorsFailSafe()
         try appServerDecoding()
         try hookEventPrivacyAndSocketRoundTrip()
-        print("PASS: 6 core tests")
+        try hookInstallerPreservesExistingEntries()
+        print("PASS: 7 core tests")
     }
 
     static let target = SessionID("target")
@@ -85,5 +86,22 @@ struct CoreTestRunner {
         let received = try receiver.receive()
         let decoded = try JSONDecoder().decode(HookEvent.self, from: received)
         try expect(decoded == event, "socket changed hook event")
+    }
+
+    static func hookInstallerPreservesExistingEntries() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("hooks.json")
+        try Data(#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/existing","statusMessage":"Existing"}]}]}}"#.utf8).write(to: file)
+        let installer = HookInstaller(hooksFile: file)
+        try installer.install(helperPath: "/Applications/Codex Sleep Watcher.app/Contents/Helpers/codex-sleep-hook")
+        try installer.install(helperPath: "/Applications/Codex Sleep Watcher.app/Contents/Helpers/codex-sleep-hook")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        try expect(text.contains("/existing"), "installer removed an existing hook")
+        let ownerField = #""statusMessage" : "Codex Sleep Watcher""#
+        try expect(text.components(separatedBy: ownerField).count - 1 == 4, "installer did not create exactly four owned hooks")
+        try installer.uninstall()
+        let uninstalled = try String(contentsOf: file, encoding: .utf8)
+        try expect(uninstalled.contains("/existing") && !uninstalled.contains(HookInstaller.owner), "uninstall removed unrelated hooks")
     }
 }
