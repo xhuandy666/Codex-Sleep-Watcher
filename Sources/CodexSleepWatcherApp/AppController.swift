@@ -72,6 +72,13 @@ final class AppController: ObservableObject {
     }
 
     func select(_ session: SessionSummary) {
+        guard selected != session.id else { return }
+        countdownTask?.cancel()
+        countdownTask = nil
+        countdown = nil
+        waitingAfterTargetStop = false
+        power.stop()
+        selected = nil
         do {
             try power.start(keepDisplayAwake: keepDisplayAwake)
             selected = session.id; status = "正在观测：\(session.name)"

@@ -8,5 +8,6 @@ struct CodexSleepWatcherApp: App {
             MenuBarView(controller: controller)
                 .task { await controller.start() }
         }
+        .menuBarExtraStyle(.window)
     }
 }
