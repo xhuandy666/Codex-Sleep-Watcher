@@ -2,9 +2,11 @@ import SwiftUI
 
 @main
 struct CodexSleepWatcherApp: App {
+    @StateObject private var controller = AppController()
     var body: some Scene {
         MenuBarExtra("Codex Sleep Watcher", systemImage: "moon.zzz") {
-            Text("Initializing")
+            MenuBarView(controller: controller)
+                .task { await controller.start() }
         }
     }
 }

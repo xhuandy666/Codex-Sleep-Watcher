@@ -1,0 +1,110 @@
+import Foundation
+import SwiftUI
+import CodexSleepWatcherCore
+
+@MainActor
+final class AppController: ObservableObject {
+    @Published private(set) var sessions: [SessionSummary] = []
+    @Published private(set) var selected: SessionID?
+    @Published private(set) var status = "正在初始化"
+    @Published private(set) var countdown: Int?
+    @Published var delaySeconds: Int
+    @Published var waitForOthers: Bool
+    @Published var keepDisplayAwake: Bool
+
+    private let settings = SettingsStore()
+    private let appServer = AppServerClient()
+    private let registry = SessionRegistry()
+    private let receiver = HookEventReceiver()
+    private let power = PowerAssertionController()
+    private let sleeper: any SystemSleeping
+    private var eventTask: Task<Void, Never>?
+    private var countdownTask: Task<Void, Never>?
+    private var waitingAfterTargetStop = false
+
+    init() {
+        delaySeconds = settings.delaySeconds
+        waitForOthers = settings.waitForOtherSessions
+        keepDisplayAwake = settings.keepDisplayAwake
+        sleeper = CommandLine.arguments.contains("--disable-real-sleep") ? LoggingSleeper() : MacSystemSleeper()
+    }
+
+    func start() async {
+        do {
+            let stream = try receiver.events()
+            eventTask = Task { [weak self] in for await event in stream { await self?.handle(event) } }
+            try await appServer.start()
+            await refresh()
+            status = "请选择一个运行中的会话"
+        } catch { status = "初始化失败：\(error.localizedDescription)" }
+    }
+
+    func refresh() async {
+        do {
+            let response = try await appServer.listThreads()
+            let active = SessionDiscoveryService.mapActiveThreads(response.data)
+            await registry.refresh(from: active)
+            sessions = active.sorted { $0.updatedAt > $1.updatedAt }
+        } catch { status = "读取会话失败：\(error.localizedDescription)" }
+    }
+
+    func installHooks() {
+        do {
+            let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/codex-sleep-hook")
+            guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CocoaError(.fileNoSuchFile) }
+            try HookInstaller().install(helperPath: helper.path)
+            status = "Hooks 已安装；请在 Codex 中审阅并信任"
+        } catch { status = "Hooks 安装失败：\(error.localizedDescription)" }
+    }
+
+    func uninstallHooks() {
+        do { try HookInstaller().uninstall(); status = "Codex Hooks 已卸载" }
+        catch { status = "Hooks 卸载失败：\(error.localizedDescription)" }
+    }
+
+    func select(_ session: SessionSummary) {
+        do {
+            try power.start(keepDisplayAwake: keepDisplayAwake)
+            selected = session.id; status = "正在观测：\(session.name)"
+        } catch { status = "无法阻止休眠：\(error.localizedDescription)" }
+    }
+
+    func cancel() {
+        countdownTask?.cancel(); countdownTask = nil; countdown = nil; selected = nil; waitingAfterTargetStop = false; power.stop(); status = "已取消观测"
+    }
+
+    func sleepNow() { do { try sleeper.sleepNow() } catch { status = "休眠失败：\(error.localizedDescription)" } }
+
+    private func handle(_ event: HookEvent) async {
+        await registry.apply(event)
+        await refresh()
+        if waitingAfterTargetStop {
+            let running = await registry.runningSessions().filter { $0.id != selected }
+            if running.isEmpty { waitingAfterTargetStop = false; beginCountdown() }
+        }
+        guard event.sessionID == selected else { return }
+        if event.kind == .userPromptSubmit { countdownTask?.cancel(); countdown = nil; status = "目标会话继续运行"; return }
+        if event.kind == .stop || event.kind == .permissionRequest {
+            let others = await registry.runningSessions().filter { $0.id != selected }
+            if waitForOthers, !others.isEmpty { waitingAfterTargetStop = true; status = "目标已停止，等待其他会话" }
+            else { beginCountdown() }
+        }
+    }
+
+    private func beginCountdown() {
+        countdownTask?.cancel()
+        settings.delaySeconds = delaySeconds; settings.waitForOtherSessions = waitForOthers; settings.keepDisplayAwake = keepDisplayAwake
+        countdownTask = Task { [weak self] in
+            guard let self else { return }
+            for await value in SleepCountdownController.ticks(seconds: delaySeconds) {
+                if Task.isCancelled { return }
+                countdown = value; status = "将在 \(value) 秒后休眠"
+            }
+            power.stop(); sleepNow()
+        }
+    }
+}
+
+private struct LoggingSleeper: SystemSleeping {
+    func sleepNow() throws { print("Codex Sleep Watcher: sleep requested") }
+}
