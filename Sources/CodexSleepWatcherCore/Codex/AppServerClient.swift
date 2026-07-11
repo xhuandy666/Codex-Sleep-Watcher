@@ -5,6 +5,7 @@ public actor AppServerClient {
     private var input: FileHandle?
     private var output: FileHandle?
     private var nextID = 0
+    private var responseBuffer = JSONLineBuffer()
 
     public init() {}
 
@@ -37,11 +38,13 @@ public actor AppServerClient {
     }
 
     private func readResponse(id: Int) throws -> Any {
-        while let data = try output?.read(upToCount: 1_048_576), !data.isEmpty {
-            for line in data.split(separator: 0x0A) {
+        while true {
+            while let line = responseBuffer.nextLine() {
                 guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
                 if object["id"] as? Int == id, let result = object["result"] { return result }
             }
+            guard let data = try output?.read(upToCount: 65_536), !data.isEmpty else { break }
+            responseBuffer.append(data)
         }
         throw CocoaError(.fileReadUnknown)
     }

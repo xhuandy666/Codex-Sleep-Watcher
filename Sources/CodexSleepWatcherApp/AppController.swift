@@ -86,6 +86,7 @@ final class AppController: ObservableObject {
 
     private func handle(_ event: HookEvent) async {
         await registry.apply(event)
+        sessions = await registry.sessions()
         await refresh()
         if waitingAfterTargetStop {
             let running = await registry.runningSessions().filter { $0.id != selected }

@@ -6,7 +6,10 @@ public actor SessionRegistry {
     public init() {}
 
     public func refresh(from summaries: [SessionSummary], preserving selected: SessionID? = nil) {
-        let visible = Set(summaries.map(\.id)).union(selected.map { [$0] } ?? [])
+        let hookDiscovered = entries.values.compactMap { $0.summary.status.isLive ? $0.summary.id : nil }
+        let visible = Set(summaries.map(\.id))
+            .union(selected.map { [$0] } ?? [])
+            .union(hookDiscovered)
         entries = entries.filter { visible.contains($0.key) }
         for summary in summaries {
             if var entry = entries[summary.id] {

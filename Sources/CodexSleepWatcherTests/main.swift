@@ -27,7 +27,9 @@ struct CoreTestRunner {
         try await sessionRegistryPreservesSelectedSession()
         try welcomePreferencePersists()
         try hookHelperLocatorSupportsAppAndDebugLayouts()
-        print("PASS: 12 core tests")
+        try jsonLineBufferPreservesFragmentedResponses()
+        try await registryPreservesHookOnlyRunningSession()
+        print("PASS: 14 core tests")
     }
 
     static let target = SessionID("target")
@@ -158,5 +160,27 @@ struct CoreTestRunner {
         try expect(packagedResult?.path == packaged, "locator did not prefer packaged helper")
         let debugResult = HookHelperLocator.locate(bundleURL: app, executableURL: executable) { $0 == debug }
         try expect(debugResult?.path == debug, "locator did not find debug sibling helper")
+    }
+
+    static func jsonLineBufferPreservesFragmentedResponses() throws {
+        var buffer = JSONLineBuffer()
+        let response = Data(#"{"id":1,"result":{"data":[1,2,3]}}"#.utf8)
+        buffer.append(response.prefix(12))
+        try expect(buffer.nextLine() == nil, "buffer emitted an incomplete JSON line")
+        buffer.append(response.dropFirst(12))
+        try expect(buffer.nextLine() == nil, "buffer emitted JSON before newline")
+        buffer.append(Data("\n{\"id\":2}\n".utf8))
+        try expect(buffer.nextLine() == response, "buffer lost the fragmented response")
+        try expect(String(decoding: buffer.nextLine() ?? Data(), as: UTF8.self) == #"{"id":2}"#, "buffer lost a trailing complete response")
+    }
+
+    static func registryPreservesHookOnlyRunningSession() async throws {
+        let registry = SessionRegistry()
+        let event = HookEvent(kind: .userPromptSubmit, sessionID: SessionID("hook-only"), turnID: TurnID("turn"), cwd: "/tmp/hook-only", receivedAt: Date())
+        await registry.apply(event)
+        await registry.refresh(from: [], preserving: nil)
+        let sessions = await registry.sessions()
+        try expect(sessions.first?.id == event.sessionID, "refresh removed a running session discovered only by Hooks")
+        try expect(sessions.first?.status == .running(turnID: event.turnID), "refresh lost the Hook-derived running state")
     }
 }

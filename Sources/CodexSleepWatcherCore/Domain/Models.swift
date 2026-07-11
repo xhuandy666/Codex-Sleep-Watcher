@@ -37,6 +37,13 @@ public enum SessionStatus: Equatable, Sendable {
         case .unknown: "状态未知"
         }
     }
+
+    public var isLive: Bool {
+        switch self {
+        case .running, .waitingOnApproval, .waitingOnUserInput: true
+        case .idle, .unknown: false
+        }
+    }
 }
 
 public struct SessionSummary: Identifiable, Equatable, Sendable {
