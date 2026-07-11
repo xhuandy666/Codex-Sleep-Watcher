@@ -25,7 +25,8 @@ struct CoreTestRunner {
         try hookInstallerPreservesExistingEntries()
         try await sessionRegistryReconcilesEvents()
         try await sessionRegistryPreservesSelectedSession()
-        print("PASS: 10 core tests")
+        try welcomePreferencePersists()
+        print("PASS: 11 core tests")
     }
 
     static let target = SessionID("target")
@@ -134,5 +135,16 @@ struct CoreTestRunner {
         await registry.refresh(from: [recent], preserving: selected.id)
         let sessions = await registry.sessions()
         try expect(sessions.map(\.id).contains(selected.id), "refresh removed the selected session")
+    }
+
+    static func welcomePreferencePersists() throws {
+        let suite = "CodexSleepWatcherTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { throw TestFailure.expected("could not create isolated defaults") }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = SettingsStore(defaults: defaults)
+        try expect(!first.hasShownWelcome, "welcome should not be marked shown initially")
+        first.hasShownWelcome = true
+        let second = SettingsStore(defaults: defaults)
+        try expect(second.hasShownWelcome, "welcome preference did not persist")
     }
 }

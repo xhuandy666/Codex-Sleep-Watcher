@@ -27,6 +27,13 @@ final class AppController: ObservableObject {
         waitForOthers = settings.waitForOtherSessions
         keepDisplayAwake = settings.keepDisplayAwake
         sleeper = CommandLine.arguments.contains("--disable-real-sleep") ? LoggingSleeper() : MacSystemSleeper()
+        if !settings.hasShownWelcome {
+            DispatchQueue.main.async { [weak self] in self?.showWelcome() }
+        }
+    }
+
+    func showWelcome() {
+        WelcomeWindowPresenter.shared.show { [weak self] in self?.settings.hasShownWelcome = true }
     }
 
     func start() async {

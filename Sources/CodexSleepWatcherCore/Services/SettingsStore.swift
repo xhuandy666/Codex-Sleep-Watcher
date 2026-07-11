@@ -9,4 +9,5 @@ public final class SettingsStore: @unchecked Sendable {
     }
     public var waitForOtherSessions: Bool { get { defaults.bool(forKey: "waitForOtherSessions") } set { defaults.set(newValue, forKey: "waitForOtherSessions") } }
     public var keepDisplayAwake: Bool { get { defaults.bool(forKey: "keepDisplayAwake") } set { defaults.set(newValue, forKey: "keepDisplayAwake") } }
+    public var hasShownWelcome: Bool { get { defaults.bool(forKey: "hasShownWelcome") } set { defaults.set(newValue, forKey: "hasShownWelcome") } }
 }

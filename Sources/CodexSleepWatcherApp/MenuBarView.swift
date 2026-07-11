@@ -18,6 +18,7 @@ struct MenuBarView: View {
         }
         Divider()
         Button("刷新会话") { Task { await controller.refresh() } }
+        Button("使用说明…") { controller.showWelcome() }
         Button("安装 / 更新 Codex Hooks") { controller.installHooks() }
         Button("卸载 Codex Hooks") { controller.uninstallHooks() }
         if controller.selected != nil { Button("取消观测") { controller.cancel() } }
