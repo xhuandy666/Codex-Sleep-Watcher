@@ -20,7 +20,8 @@ struct CoreTestRunner {
         try waitForOthersDefersCountdown()
         try observationErrorsFailSafe()
         try appServerDecoding()
-        print("PASS: 5 core tests")
+        try hookEventPrivacyAndSocketRoundTrip()
+        print("PASS: 6 core tests")
     }
 
     static let target = SessionID("target")
@@ -70,5 +71,19 @@ struct CoreTestRunner {
         let sessions = SessionDiscoveryService.mapActiveThreads(response.data)
         try expect(sessions.first?.id == SessionID("session-a"), "thread/list did not map sessionId")
         try expect(sessions.first?.name == "Build app", "thread/list lost display name")
+    }
+
+    static func hookEventPrivacyAndSocketRoundTrip() throws {
+        let input = Data(#"{"session_id":"s1","turn_id":"t1","cwd":"/repo","hook_event_name":"Stop","prompt":"secret","last_assistant_message":"secret"}"#.utf8)
+        let event = try HookEvent.fromHookInput(input, receivedAt: Date(timeIntervalSince1970: 10))
+        let encoded = try JSONEncoder().encode(event)
+        try expect(!String(decoding: encoded, as: UTF8.self).contains("secret"), "hook event leaked task content")
+        let path = NSTemporaryDirectory() + "/csw-\(UUID().uuidString.prefix(8)).sock"
+        let receiver = try UnixDatagramReceiver(path: path)
+        defer { receiver.close() }
+        try UnixDatagramSocket.send(encoded, to: path)
+        let received = try receiver.receive()
+        let decoded = try JSONDecoder().decode(HookEvent.self, from: received)
+        try expect(decoded == event, "socket changed hook event")
     }
 }
