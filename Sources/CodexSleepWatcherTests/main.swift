@@ -14,7 +14,7 @@ func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
 
 @main
 struct CoreTestRunner {
-    static func main() throws {
+    static func main() async throws {
         try onlyTargetStopStartsCountdown()
         try targetRestartCancelsCountdown()
         try waitForOthersDefersCountdown()
@@ -22,7 +22,8 @@ struct CoreTestRunner {
         try appServerDecoding()
         try hookEventPrivacyAndSocketRoundTrip()
         try hookInstallerPreservesExistingEntries()
-        print("PASS: 7 core tests")
+        try await sessionRegistryReconcilesEvents()
+        print("PASS: 8 core tests")
     }
 
     static let target = SessionID("target")
@@ -103,5 +104,14 @@ struct CoreTestRunner {
         try installer.uninstall()
         let uninstalled = try String(contentsOf: file, encoding: .utf8)
         try expect(uninstalled.contains("/existing") && !uninstalled.contains(HookInstaller.owner), "uninstall removed unrelated hooks")
+    }
+
+    static func sessionRegistryReconcilesEvents() async throws {
+        let registry = SessionRegistry()
+        let summary = SessionSummary(id: SessionID("s1"), threadID: "thread-1", name: "Task", cwd: "/repo", updatedAt: Date(timeIntervalSince1970: 10), status: .running(turnID: nil))
+        await registry.refresh(from: [summary])
+        await registry.apply(HookEvent(kind: .stop, sessionID: SessionID("s1"), turnID: TurnID("t1"), cwd: "/repo", receivedAt: Date(timeIntervalSince1970: 20)))
+        let status = await registry.session(id: SessionID("s1"))?.status
+        try expect(status == .idle, "newer Stop event did not override snapshot")
     }
 }

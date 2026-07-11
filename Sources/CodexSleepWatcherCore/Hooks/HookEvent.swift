@@ -14,6 +14,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
     public let cwd: String
     public let receivedAt: Date
 
+    public init(kind: HookEventKind, sessionID: SessionID, turnID: TurnID?, cwd: String, receivedAt: Date) {
+        self.kind = kind; self.sessionID = sessionID; self.turnID = turnID; self.cwd = cwd; self.receivedAt = receivedAt
+    }
+
     public static func fromHookInput(_ data: Data, receivedAt: Date) throws -> HookEvent {
         let raw = try JSONDecoder().decode(RawHookInput.self, from: data)
         guard let kind = HookEventKind(rawValue: raw.hookEventName) else { throw HookEventError.unsupportedEvent }
