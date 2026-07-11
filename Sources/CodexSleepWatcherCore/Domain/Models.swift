@@ -5,7 +5,7 @@ public struct SessionID: RawRepresentable, Hashable, Codable, Sendable, CustomSt
     public init(rawValue: String) { self.rawValue = rawValue }
     public init(_ rawValue: String) { self.rawValue = rawValue }
     public var description: String { rawValue }
-    public var short: String { String(rawValue.prefix(8)) }
+    public var short: String { String(rawValue.suffix(6)) }
 }
 
 public struct TurnID: RawRepresentable, Hashable, Codable, Sendable {

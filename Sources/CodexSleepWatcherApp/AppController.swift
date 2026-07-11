@@ -21,6 +21,7 @@ final class AppController: ObservableObject {
     private var eventTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
     private var waitingAfterTargetStop = false
+    private var hasStarted = false
 
     init() {
         delaySeconds = settings.delaySeconds
@@ -37,13 +38,20 @@ final class AppController: ObservableObject {
     }
 
     func start() async {
+        guard !hasStarted else { return }
+        hasStarted = true
         do {
             let stream = try receiver.events()
             eventTask = Task { [weak self] in for await event in stream { await self?.handle(event) } }
             try await appServer.start()
             status = "请选择一个运行中的会话"
             await refresh()
-        } catch { status = "初始化失败：\(error.localizedDescription)" }
+        } catch {
+            hasStarted = false
+            eventTask?.cancel()
+            eventTask = nil
+            status = "初始化失败：\(error.localizedDescription)"
+        }
     }
 
     func refresh() async {
@@ -94,7 +102,11 @@ final class AppController: ObservableObject {
     private func handle(_ event: HookEvent) async {
         await registry.apply(event)
         sessions = await registry.sessions()
-        await refresh()
+#if DEBUG
+        let project = URL(fileURLWithPath: event.cwd).lastPathComponent
+        let visible = sessions.map { "\($0.id.short):\($0.status.displayName)" }.joined(separator: ",")
+        print("CSW_EVENT kind=\(event.kind.rawValue) id=\(event.sessionID.short) project=\(project) visible=[\(visible)]")
+#endif
         if waitingAfterTargetStop {
             let running = await registry.runningSessions().filter { $0.id != selected }
             if running.isEmpty { waitingAfterTargetStop = false; beginCountdown() }

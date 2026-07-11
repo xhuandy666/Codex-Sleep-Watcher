@@ -30,7 +30,9 @@ struct CoreTestRunner {
         try jsonLineBufferPreservesFragmentedResponses()
         try await registryPreservesHookOnlyRunningSession()
         try await sessionStartMarksSessionRunning()
-        print("PASS: 15 core tests")
+        try await hookReceiverSkipsMalformedDatagrams()
+        try concurrentSessionShortIDsAreDistinct()
+        print("PASS: 17 core tests")
     }
 
     static let target = SessionID("target")
@@ -191,5 +193,24 @@ struct CoreTestRunner {
         await registry.apply(event)
         let status = await registry.session(id: event.sessionID)?.status
         try expect(status == .running(turnID: nil), "SessionStart did not mark the session running")
+    }
+
+    static func hookReceiverSkipsMalformedDatagrams() async throws {
+        let path = NSTemporaryDirectory() + "/csw-stream-\(UUID().uuidString.prefix(8)).sock"
+        let receiver = HookEventReceiver(socketPath: path)
+        let stream = try receiver.events()
+        defer { receiver.stop() }
+        try UnixDatagramSocket.send(Data("not-json".utf8), to: path)
+        let event = HookEvent(kind: .userPromptSubmit, sessionID: SessionID("after-invalid"), turnID: nil, cwd: "/tmp", receivedAt: Date())
+        try UnixDatagramSocket.send(JSONEncoder().encode(event), to: path)
+        var iterator = stream.makeAsyncIterator()
+        let received = await iterator.next()
+        try expect(received == event, "receiver stopped after a malformed datagram")
+    }
+
+    static func concurrentSessionShortIDsAreDistinct() throws {
+        let first = SessionID("019f521b-9a08-7560-9457-f6c6559709ff")
+        let second = SessionID("019f521b-fedd-78b0-b927-a179e0fa6ef0")
+        try expect(first.short != second.short, "concurrent UUIDv7 sessions have colliding short IDs")
     }
 }
