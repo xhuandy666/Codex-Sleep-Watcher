@@ -29,7 +29,8 @@ struct CoreTestRunner {
         try hookHelperLocatorSupportsAppAndDebugLayouts()
         try jsonLineBufferPreservesFragmentedResponses()
         try await registryPreservesHookOnlyRunningSession()
-        print("PASS: 14 core tests")
+        try await sessionStartMarksSessionRunning()
+        print("PASS: 15 core tests")
     }
 
     static let target = SessionID("target")
@@ -85,8 +86,8 @@ struct CoreTestRunner {
         try expect(SessionStatus.running(turnID: nil).displayName == "运行中", "running label is unclear")
         try expect(SessionStatus.waitingOnApproval.displayName == "等待授权", "approval label is unclear")
         try expect(SessionStatus.waitingOnUserInput.displayName == "等待输入", "input label is unclear")
-        try expect(SessionStatus.idle.displayName == "已停止", "idle label is unclear")
-        try expect(SessionStatus.unknown.displayName == "状态未知", "unknown label is unclear")
+        try expect(SessionStatus.idle.displayName == "本轮已完成", "idle label is unclear")
+        try expect(SessionStatus.unknown.displayName == "尚未收到事件", "unknown label is unclear")
     }
 
     static func hookEventPrivacyAndSocketRoundTrip() throws {
@@ -182,5 +183,13 @@ struct CoreTestRunner {
         let sessions = await registry.sessions()
         try expect(sessions.first?.id == event.sessionID, "refresh removed a running session discovered only by Hooks")
         try expect(sessions.first?.status == .running(turnID: event.turnID), "refresh lost the Hook-derived running state")
+    }
+
+    static func sessionStartMarksSessionRunning() async throws {
+        let registry = SessionRegistry()
+        let event = HookEvent(kind: .sessionStart, sessionID: SessionID("started"), turnID: nil, cwd: "/tmp/started", receivedAt: Date())
+        await registry.apply(event)
+        let status = await registry.session(id: event.sessionID)?.status
+        try expect(status == .running(turnID: nil), "SessionStart did not mark the session running")
     }
 }

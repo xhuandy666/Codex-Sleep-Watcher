@@ -29,9 +29,10 @@ public actor SessionRegistry {
             id: event.sessionID, threadID: event.sessionID.rawValue, name: URL(fileURLWithPath: event.cwd).lastPathComponent,
             cwd: event.cwd, updatedAt: event.receivedAt, status: .idle)
         switch event.kind {
+        case .sessionStart: summary.status = .running(turnID: nil)
         case .userPromptSubmit: summary.status = .running(turnID: event.turnID)
         case .permissionRequest: summary.status = .waitingOnApproval
-        case .stop, .sessionStart: summary.status = .idle
+        case .stop: summary.status = .idle
         }
         summary.updatedAt = event.receivedAt
         entries[event.sessionID] = Entry(summary: summary, lastHookEventAt: event.receivedAt)

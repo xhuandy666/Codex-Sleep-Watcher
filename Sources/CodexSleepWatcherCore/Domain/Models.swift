@@ -33,8 +33,8 @@ public enum SessionStatus: Equatable, Sendable {
         case .running: "运行中"
         case .waitingOnApproval: "等待授权"
         case .waitingOnUserInput: "等待输入"
-        case .idle: "已停止"
-        case .unknown: "状态未知"
+        case .idle: "本轮已完成"
+        case .unknown: "尚未收到事件"
         }
     }
 
