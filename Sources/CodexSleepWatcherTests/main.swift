@@ -19,7 +19,8 @@ struct CoreTestRunner {
         try targetRestartCancelsCountdown()
         try waitForOthersDefersCountdown()
         try observationErrorsFailSafe()
-        print("PASS: 4 state-machine tests")
+        try appServerDecoding()
+        print("PASS: 5 core tests")
     }
 
     static let target = SessionID("target")
@@ -61,5 +62,13 @@ struct CoreTestRunner {
         try machine.reduce(.fatalObservationError("event stream disconnected"))
         try expect(machine.phase == .idle, "observation error did not return to idle")
         try expect(machine.lastError == "event stream disconnected", "observation error was not retained")
+    }
+
+    static func appServerDecoding() throws {
+        let json = #"{"data":[{"id":"thread-a","sessionId":"session-a","name":"Build app","cwd":"/repo/a","createdAt":1,"updatedAt":2,"status":{"type":"active","activeFlags":[]},"source":"appServer","modelProvider":"openai","cliVersion":"1","ephemeral":false,"turns":[],"preview":"ignored"}],"nextCursor":null}"#
+        let response = try JSONDecoder().decode(ThreadListResponse.self, from: Data(json.utf8))
+        let sessions = SessionDiscoveryService.mapActiveThreads(response.data)
+        try expect(sessions.first?.id == SessionID("session-a"), "thread/list did not map sessionId")
+        try expect(sessions.first?.name == "Build app", "thread/list lost display name")
     }
 }
