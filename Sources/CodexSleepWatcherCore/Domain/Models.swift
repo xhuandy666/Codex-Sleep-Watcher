@@ -27,6 +27,16 @@ public enum SessionStatus: Equatable, Sendable {
         default: false
         }
     }
+
+    public var displayName: String {
+        switch self {
+        case .running: "运行中"
+        case .waitingOnApproval: "等待授权"
+        case .waitingOnUserInput: "等待输入"
+        case .idle: "已停止"
+        case .unknown: "状态未知"
+        }
+    }
 }
 
 public struct SessionSummary: Identifiable, Equatable, Sendable {

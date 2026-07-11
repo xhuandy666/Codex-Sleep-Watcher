@@ -20,11 +20,12 @@ struct CoreTestRunner {
         try waitForOthersDefersCountdown()
         try observationErrorsFailSafe()
         try recentSessionDiscoveryIncludesUnloadedThreads()
+        try sessionStatusLabels()
         try hookEventPrivacyAndSocketRoundTrip()
         try hookInstallerPreservesExistingEntries()
         try await sessionRegistryReconcilesEvents()
         try await sessionRegistryPreservesSelectedSession()
-        print("PASS: 9 core tests")
+        print("PASS: 10 core tests")
     }
 
     static let target = SessionID("target")
@@ -74,6 +75,14 @@ struct CoreTestRunner {
         let sessions = SessionDiscoveryService.mapRecentThreads(response.data, limit: 2)
         try expect(sessions.map(\.id) == [SessionID("session-b"), SessionID("session-a")], "recent thread mapping filtered or misordered candidates")
         try expect(sessions.first?.status == .unknown, "notLoaded thread did not map to unknown status")
+    }
+
+    static func sessionStatusLabels() throws {
+        try expect(SessionStatus.running(turnID: nil).displayName == "运行中", "running label is unclear")
+        try expect(SessionStatus.waitingOnApproval.displayName == "等待授权", "approval label is unclear")
+        try expect(SessionStatus.waitingOnUserInput.displayName == "等待输入", "input label is unclear")
+        try expect(SessionStatus.idle.displayName == "已停止", "idle label is unclear")
+        try expect(SessionStatus.unknown.displayName == "状态未知", "unknown label is unclear")
     }
 
     static func hookEventPrivacyAndSocketRoundTrip() throws {

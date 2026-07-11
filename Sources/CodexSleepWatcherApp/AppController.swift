@@ -34,17 +34,17 @@ final class AppController: ObservableObject {
             let stream = try receiver.events()
             eventTask = Task { [weak self] in for await event in stream { await self?.handle(event) } }
             try await appServer.start()
-            await refresh()
             status = "请选择一个运行中的会话"
+            await refresh()
         } catch { status = "初始化失败：\(error.localizedDescription)" }
     }
 
     func refresh() async {
         do {
             let response = try await appServer.listThreads()
-            let active = SessionDiscoveryService.mapActiveThreads(response.data)
-            await registry.refresh(from: active)
-            sessions = active.sorted { $0.updatedAt > $1.updatedAt }
+            let recent = SessionDiscoveryService.mapRecentThreads(response.data)
+            await registry.refresh(from: recent, preserving: selected)
+            sessions = await registry.sessions()
         } catch { status = "读取会话失败：\(error.localizedDescription)" }
     }
 
