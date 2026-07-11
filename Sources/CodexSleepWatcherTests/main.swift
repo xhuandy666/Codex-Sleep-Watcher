@@ -26,7 +26,8 @@ struct CoreTestRunner {
         try await sessionRegistryReconcilesEvents()
         try await sessionRegistryPreservesSelectedSession()
         try welcomePreferencePersists()
-        print("PASS: 11 core tests")
+        try hookHelperLocatorSupportsAppAndDebugLayouts()
+        print("PASS: 12 core tests")
     }
 
     static let target = SessionID("target")
@@ -146,5 +147,16 @@ struct CoreTestRunner {
         first.hasShownWelcome = true
         let second = SettingsStore(defaults: defaults)
         try expect(second.hasShownWelcome, "welcome preference did not persist")
+    }
+
+    static func hookHelperLocatorSupportsAppAndDebugLayouts() throws {
+        let app = URL(fileURLWithPath: "/Applications/Codex Sleep Watcher.app")
+        let executable = URL(fileURLWithPath: "/tmp/debug/CodexSleepWatcherApp")
+        let packaged = app.appendingPathComponent("Contents/Helpers/codex-sleep-hook").path
+        let debug = executable.deletingLastPathComponent().appendingPathComponent("codex-sleep-hook").path
+        let packagedResult = HookHelperLocator.locate(bundleURL: app, executableURL: executable) { $0 == packaged }
+        try expect(packagedResult?.path == packaged, "locator did not prefer packaged helper")
+        let debugResult = HookHelperLocator.locate(bundleURL: app, executableURL: executable) { $0 == debug }
+        try expect(debugResult?.path == debug, "locator did not find debug sibling helper")
     }
 }

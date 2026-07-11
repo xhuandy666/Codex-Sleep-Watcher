@@ -57,10 +57,12 @@ final class AppController: ObservableObject {
 
     func installHooks() {
         do {
-            let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/codex-sleep-hook")
-            guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw CocoaError(.fileNoSuchFile) }
+            guard let helper = HookHelperLocator.locate(
+                bundleURL: Bundle.main.bundleURL,
+                executableURL: Bundle.main.executableURL
+            ) else { throw CocoaError(.fileNoSuchFile) }
             try HookInstaller().install(helperPath: helper.path)
-            status = "Hooks 已安装；请在 Codex 中审阅并信任"
+            status = "Hooks 已安装；请在 Codex 中信任。下一次提交任务后会显示运行中"
         } catch { status = "Hooks 安装失败：\(error.localizedDescription)" }
     }
 

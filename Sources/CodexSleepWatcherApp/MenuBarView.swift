@@ -6,6 +6,7 @@ struct MenuBarView: View {
     var body: some View {
         Text(controller.status).font(.headline)
         if controller.sessions.isEmpty { Text("没有找到最近的 Codex 会话，请先创建或运行一个任务。").foregroundStyle(.secondary) }
+        else { Text("状态未知表示尚未收到 Hooks 事件").font(.caption).foregroundStyle(.secondary) }
         ForEach(controller.sessions) { session in
             Button {
                 controller.select(session)
