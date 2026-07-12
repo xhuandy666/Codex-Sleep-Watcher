@@ -22,7 +22,7 @@ public actor AppServerClient {
         process.standardError = FileHandle.nullDevice
         try process.run()
         self.process = process; input = stdin.fileHandleForWriting; output = stdout.fileHandleForReading
-        try send(["method":"initialize", "id":0, "params":["clientInfo":["name":"codex_sleep_watcher", "title":"Codex Sleep Watcher", "version":"0.1.0"]]])
+        try send(["method":"initialize", "id":0, "params":["clientInfo":["name":"codex_sleep_watcher", "title":"Codex Sleep Watcher", "version":"0.1.1"]]])
         _ = try readResponse(id: 0)
         try send(["method":"initialized", "params":[:]])
         nextID = 1
