@@ -34,7 +34,13 @@ struct CoreTestRunner {
         try concurrentSessionShortIDsAreDistinct()
         try codexLocatorSupportsFinderEnvironment()
         try await toolHooksRestoreRunningState()
-        print("PASS: 19 core tests")
+        try targetEventDecisionIsPermissionSafe()
+        try permissionWaitDoesNotStartCountdown()
+        try permissionCancelsPendingSleep()
+        try waitingOtherSessionDefersCountdown()
+        try await registryTreatsWaitingSessionsAsActive()
+        try await registryRejectsStaleStop()
+        print("PASS: 25 core tests")
     }
 
     static let target = SessionID("target")
@@ -242,5 +248,94 @@ struct CoreTestRunner {
         await registry.apply(post)
         let postStatus = await registry.session(id: post.sessionID)?.status
         try expect(postStatus == .running(turnID: post.turnID), "PostToolUse did not restore running state")
+    }
+
+    static func targetEventDecisionIsPermissionSafe() throws {
+        try expect(HookEventKind.sessionStart.targetDecision == .activity, "SessionStart is not activity")
+        try expect(HookEventKind.userPromptSubmit.targetDecision == .activity, "UserPromptSubmit is not activity")
+        try expect(HookEventKind.preToolUse.targetDecision == .activity, "PreToolUse is not activity")
+        try expect(HookEventKind.postToolUse.targetDecision == .activity, "PostToolUse is not activity")
+        try expect(HookEventKind.permissionRequest.targetDecision == .waitingForAuthorization, "PermissionRequest can trigger sleep")
+        try expect(HookEventKind.stop.targetDecision == .stopped, "Stop is not classified as stopped")
+    }
+
+    static func permissionWaitDoesNotStartCountdown() throws {
+        var machine = WatchStateMachine()
+        try machine.reduce(.knownRunningSessions([target]))
+        try machine.reduce(.selectTarget(target))
+        try machine.reduce(.sessionEvent(sessionID: target, status: .waitingOnApproval))
+        try expect(machine.phase == .monitoring(target), "waiting for authorization started a countdown")
+        try machine.reduce(.sessionEvent(sessionID: target, status: .waitingOnUserInput))
+        try expect(machine.phase == .monitoring(target), "waiting for user input started a countdown")
+    }
+
+    static func permissionCancelsPendingSleep() throws {
+        var machine = WatchStateMachine()
+        try machine.reduce(.knownRunningSessions([target]))
+        try machine.reduce(.selectTarget(target))
+        try machine.reduce(.sessionEvent(sessionID: target, status: .idle))
+        try expect(machine.phase == .countdown(target, secondsRemaining: 30), "Stop did not start the test countdown")
+        try machine.reduce(.sessionEvent(sessionID: target, status: .waitingOnApproval))
+        try expect(machine.phase == .monitoring(target), "authorization request did not cancel a pending countdown")
+    }
+
+    static func waitingOtherSessionDefersCountdown() throws {
+        var machine = WatchStateMachine(settings: .init(delaySeconds: 30, waitForOtherSessions: true))
+        try machine.reduce(.knownRunningSessions([target, other]))
+        try machine.reduce(.selectTarget(target))
+        try machine.reduce(.sessionEvent(sessionID: other, status: .waitingOnApproval))
+        try machine.reduce(.sessionEvent(sessionID: target, status: .idle))
+        try expect(machine.phase == .waitingForOtherSessions(target), "waiting other session did not defer countdown")
+    }
+
+    static func registryTreatsWaitingSessionsAsActive() async throws {
+        let registry = SessionRegistry()
+        let event = HookEvent(
+            kind: .permissionRequest,
+            sessionID: SessionID("waiting"),
+            turnID: TurnID("turn"),
+            cwd: "/repo",
+            receivedAt: Date()
+        )
+        await registry.apply(event)
+        let active = await registry.runningSessions()
+        try expect(active.map(\.id).contains(event.sessionID), "waiting authorization session was not considered active")
+
+        let waitingInput = SessionSummary(
+            id: SessionID("waiting-input"),
+            threadID: "waiting-input",
+            name: "Waiting input",
+            cwd: "/repo",
+            updatedAt: Date(),
+            status: .waitingOnUserInput
+        )
+        await registry.refresh(from: [waitingInput])
+        let refreshedActive = await registry.runningSessions()
+        try expect(refreshedActive.map(\.id).contains(waitingInput.id), "waiting input session was not considered active")
+    }
+
+    static func registryRejectsStaleStop() async throws {
+        let registry = SessionRegistry()
+        let sessionID = SessionID("ordered")
+        let activity = HookEvent(
+            kind: .preToolUse,
+            sessionID: sessionID,
+            turnID: TurnID("turn"),
+            cwd: "/repo",
+            receivedAt: Date(timeIntervalSince1970: 20)
+        )
+        let staleStop = HookEvent(
+            kind: .stop,
+            sessionID: sessionID,
+            turnID: TurnID("turn"),
+            cwd: "/repo",
+            receivedAt: Date(timeIntervalSince1970: 10)
+        )
+        let activityAccepted = await registry.apply(activity)
+        let staleStopAccepted = await registry.apply(staleStop)
+        try expect(activityAccepted, "new activity event was rejected")
+        try expect(!staleStopAccepted, "stale Stop event was accepted")
+        let status = await registry.session(id: sessionID)?.status
+        try expect(status == .running(turnID: activity.turnID), "stale Stop changed the running state")
     }
 }

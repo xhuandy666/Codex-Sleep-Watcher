@@ -100,24 +100,46 @@ final class AppController: ObservableObject {
     func sleepNow() { do { try sleeper.sleepNow() } catch { status = "休眠失败：\(error.localizedDescription)" } }
 
     private func handle(_ event: HookEvent) async {
-        await registry.apply(event)
+        let accepted = await registry.apply(event)
+        guard accepted else {
+#if DEBUG
+            print("CSW_EVENT ignored stale kind=\(event.kind.rawValue) id=\(event.sessionID.short)")
+#endif
+            return
+        }
         sessions = await registry.sessions()
 #if DEBUG
         let project = URL(fileURLWithPath: event.cwd).lastPathComponent
         let visible = sessions.map { "\($0.id.short):\($0.status.displayName)" }.joined(separator: ",")
         print("CSW_EVENT kind=\(event.kind.rawValue) id=\(event.sessionID.short) project=\(project) visible=[\(visible)]")
 #endif
-        if waitingAfterTargetStop {
-            let running = await registry.runningSessions().filter { $0.id != selected }
-            if running.isEmpty { waitingAfterTargetStop = false; beginCountdown() }
+        guard event.sessionID == selected else {
+            if waitingAfterTargetStop {
+                let active = await registry.runningSessions().filter { $0.id != selected }
+                if active.isEmpty { waitingAfterTargetStop = false; beginCountdown() }
+            }
+            return
         }
-        guard event.sessionID == selected else { return }
-        if event.kind == .userPromptSubmit { countdownTask?.cancel(); countdown = nil; status = "目标会话继续运行"; return }
-        if event.kind == .stop || event.kind == .permissionRequest {
+
+        switch event.kind.targetDecision {
+        case .activity:
+            cancelPendingSleep()
+            status = "目标会话继续运行"
+        case .waitingForAuthorization:
+            cancelPendingSleep()
+            status = "目标等待授权，保持唤醒"
+        case .stopped:
             let others = await registry.runningSessions().filter { $0.id != selected }
             if waitForOthers, !others.isEmpty { waitingAfterTargetStop = true; status = "目标已停止，等待其他会话" }
             else { beginCountdown() }
         }
+    }
+
+    private func cancelPendingSleep() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        countdown = nil
+        waitingAfterTargetStop = false
     }
 
     private func beginCountdown() {
@@ -129,6 +151,7 @@ final class AppController: ObservableObject {
                 if Task.isCancelled { return }
                 countdown = value; status = "将在 \(value) 秒后休眠"
             }
+            guard !Task.isCancelled else { return }
             power.stop(); sleepNow()
         }
     }

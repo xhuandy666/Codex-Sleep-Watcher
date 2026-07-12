@@ -23,8 +23,9 @@ public actor SessionRegistry {
         }
     }
 
-    public func apply(_ event: HookEvent) {
-        guard entries[event.sessionID]?.lastHookEventAt ?? .distantPast <= event.receivedAt else { return }
+    @discardableResult
+    public func apply(_ event: HookEvent) -> Bool {
+        guard entries[event.sessionID]?.lastHookEventAt ?? .distantPast <= event.receivedAt else { return false }
         var summary = entries[event.sessionID]?.summary ?? SessionSummary(
             id: event.sessionID, threadID: event.sessionID.rawValue, name: URL(fileURLWithPath: event.cwd).lastPathComponent,
             cwd: event.cwd, updatedAt: event.receivedAt, status: .idle)
@@ -36,9 +37,10 @@ public actor SessionRegistry {
         }
         summary.updatedAt = event.receivedAt
         entries[event.sessionID] = Entry(summary: summary, lastHookEventAt: event.receivedAt)
+        return true
     }
 
     public func session(id: SessionID) -> SessionSummary? { entries[id]?.summary }
     public func sessions() -> [SessionSummary] { entries.values.map(\.summary).sorted { $0.updatedAt > $1.updatedAt } }
-    public func runningSessions() -> [SessionSummary] { entries.values.map(\.summary).filter { $0.status.isRunning } }
+    public func runningSessions() -> [SessionSummary] { entries.values.map(\.summary).filter { $0.status.isLive } }
 }

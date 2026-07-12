@@ -3,7 +3,7 @@ public struct WatchStateMachine: Sendable {
     public private(set) var lastError: String?
     public var settings: WatchSettings
 
-    private var runningSessions: Set<SessionID> = []
+    private var activeSessions: Set<SessionID> = []
     private var target: SessionID?
 
     public init(settings: WatchSettings = .init(), phase: WatchPhase = .idle) {
@@ -18,9 +18,9 @@ public struct WatchStateMachine: Sendable {
         case .setupReady:
             reset(to: .idle)
         case .knownRunningSessions(let sessions):
-            runningSessions = sessions
+            activeSessions = sessions
         case .selectTarget(let sessionID):
-            guard runningSessions.contains(sessionID) else { throw WatchStateError.targetIsNotRunning(sessionID) }
+            guard activeSessions.contains(sessionID) else { throw WatchStateError.targetIsNotRunning(sessionID) }
             target = sessionID
             lastError = nil
             phase = .monitoring(sessionID)
@@ -36,22 +36,22 @@ public struct WatchStateMachine: Sendable {
     }
 
     private mutating func applyStatus(_ status: SessionStatus, to sessionID: SessionID) {
-        if status.isRunning {
-            runningSessions.insert(sessionID)
+        if status.isLive {
+            activeSessions.insert(sessionID)
         } else {
-            runningSessions.remove(sessionID)
+            activeSessions.remove(sessionID)
         }
 
         guard sessionID == target else {
-            if case .waitingForOtherSessions(let targetID) = phase, runningSessions.isEmpty {
+            if case .waitingForOtherSessions(let targetID) = phase, activeSessions.isEmpty {
                 phase = .countdown(targetID, secondsRemaining: settings.delaySeconds)
             }
             return
         }
 
-        if status.isRunning {
+        if status.isLive {
             phase = .monitoring(sessionID)
-        } else if settings.waitForOtherSessions, !runningSessions.isEmpty {
+        } else if settings.waitForOtherSessions, !activeSessions.isEmpty {
             phase = .waitingForOtherSessions(sessionID)
         } else {
             phase = .countdown(sessionID, secondsRemaining: settings.delaySeconds)
