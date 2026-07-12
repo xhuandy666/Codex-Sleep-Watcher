@@ -3,6 +3,8 @@ import Foundation
 public enum HookEventKind: String, Codable, Sendable {
     case sessionStart = "SessionStart"
     case userPromptSubmit = "UserPromptSubmit"
+    case preToolUse = "PreToolUse"
+    case postToolUse = "PostToolUse"
     case permissionRequest = "PermissionRequest"
     case stop = "Stop"
 }

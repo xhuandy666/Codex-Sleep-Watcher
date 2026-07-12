@@ -30,7 +30,7 @@ public actor SessionRegistry {
             cwd: event.cwd, updatedAt: event.receivedAt, status: .idle)
         switch event.kind {
         case .sessionStart: summary.status = .running(turnID: nil)
-        case .userPromptSubmit: summary.status = .running(turnID: event.turnID)
+        case .userPromptSubmit, .preToolUse, .postToolUse: summary.status = .running(turnID: event.turnID)
         case .permissionRequest: summary.status = .waitingOnApproval
         case .stop: summary.status = .idle
         }

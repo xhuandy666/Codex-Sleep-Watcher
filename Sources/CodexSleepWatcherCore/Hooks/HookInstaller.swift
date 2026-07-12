@@ -3,7 +3,7 @@ import Foundation
 public struct HookInstaller: Sendable {
     public static let owner = "Codex Sleep Watcher"
     public let hooksFile: URL
-    private let events = ["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"]
+    private let events = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"]
 
     public init(hooksFile: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/hooks.json")) {
         self.hooksFile = hooksFile

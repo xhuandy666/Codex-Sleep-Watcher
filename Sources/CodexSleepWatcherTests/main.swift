@@ -33,7 +33,8 @@ struct CoreTestRunner {
         try await hookReceiverSkipsMalformedDatagrams()
         try concurrentSessionShortIDsAreDistinct()
         try codexLocatorSupportsFinderEnvironment()
-        print("PASS: 18 core tests")
+        try await toolHooksRestoreRunningState()
+        print("PASS: 19 core tests")
     }
 
     static let target = SessionID("target")
@@ -118,7 +119,7 @@ struct CoreTestRunner {
         let text = try String(contentsOf: file, encoding: .utf8)
         try expect(text.contains("/existing"), "installer removed an existing hook")
         let ownerField = #""statusMessage" : "Codex Sleep Watcher""#
-        try expect(text.components(separatedBy: ownerField).count - 1 == 4, "installer did not create exactly four owned hooks")
+        try expect(text.components(separatedBy: ownerField).count - 1 == 6, "installer did not create exactly six owned hooks")
         try installer.uninstall()
         let uninstalled = try String(contentsOf: file, encoding: .utf8)
         try expect(uninstalled.contains("/existing") && !uninstalled.contains(HookInstaller.owner), "uninstall removed unrelated hooks")
@@ -222,5 +223,24 @@ struct CoreTestRunner {
             homeDirectory: URL(fileURLWithPath: "/Users/test")
         ) { $0 == chatGPTCodex }
         try expect(result?.path == chatGPTCodex, "Finder environment could not locate the Codex bundled with ChatGPT")
+    }
+
+    static func toolHooksRestoreRunningState() async throws {
+        let preInput = Data(#"{"session_id":"tool-session","turn_id":"turn-1","cwd":"/repo","hook_event_name":"PreToolUse"}"#.utf8)
+        let postInput = Data(#"{"session_id":"tool-session","turn_id":"turn-1","cwd":"/repo","hook_event_name":"PostToolUse"}"#.utf8)
+        let pre = try HookEvent.fromHookInput(preInput, receivedAt: Date(timeIntervalSince1970: 20))
+        let post = try HookEvent.fromHookInput(postInput, receivedAt: Date(timeIntervalSince1970: 30))
+        try expect(pre.kind == .preToolUse, "PreToolUse did not decode")
+        try expect(post.kind == .postToolUse, "PostToolUse did not decode")
+
+        let registry = SessionRegistry()
+        await registry.apply(HookEvent(kind: .permissionRequest, sessionID: pre.sessionID, turnID: pre.turnID, cwd: pre.cwd, receivedAt: Date(timeIntervalSince1970: 10)))
+        await registry.apply(pre)
+        let preStatus = await registry.session(id: pre.sessionID)?.status
+        try expect(preStatus == .running(turnID: pre.turnID), "PreToolUse did not restore running state")
+        await registry.apply(HookEvent(kind: .permissionRequest, sessionID: post.sessionID, turnID: post.turnID, cwd: post.cwd, receivedAt: Date(timeIntervalSince1970: 25)))
+        await registry.apply(post)
+        let postStatus = await registry.session(id: post.sessionID)?.status
+        try expect(postStatus == .running(turnID: post.turnID), "PostToolUse did not restore running state")
     }
 }
