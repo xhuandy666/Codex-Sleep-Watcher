@@ -22,6 +22,7 @@ final class AppController: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private var waitingAfterTargetStop = false
     private var hasStarted = false
+    private var observation = ObservationFence()
 
     init() {
         delaySeconds = settings.delaySeconds
@@ -70,7 +71,7 @@ final class AppController: ObservableObject {
                 executableURL: Bundle.main.executableURL
             ) else { throw CocoaError(.fileNoSuchFile) }
             try HookInstaller().install(helperPath: helper.path)
-            status = "Hooks 已安装；请在 Codex 中信任。下一次提交任务后会显示运行中"
+            status = "六个 Hooks 已安装/更新；请在 Codex 中重新审阅并信任"
         } catch { status = "Hooks 安装失败：\(error.localizedDescription)" }
     }
 
@@ -81,20 +82,19 @@ final class AppController: ObservableObject {
 
     func select(_ session: SessionSummary) {
         guard selected != session.id else { return }
-        countdownTask?.cancel()
-        countdownTask = nil
-        countdown = nil
-        waitingAfterTargetStop = false
+        cancelPendingSleep()
         power.stop()
+        observation.cancel()
         selected = nil
         do {
             try power.start(keepDisplayAwake: keepDisplayAwake)
+            observation.select(session.id)
             selected = session.id; status = "正在观测：\(session.name)"
         } catch { status = "无法阻止休眠：\(error.localizedDescription)" }
     }
 
     func cancel() {
-        countdownTask?.cancel(); countdownTask = nil; countdown = nil; selected = nil; waitingAfterTargetStop = false; power.stop(); status = "已取消观测"
+        cancelPendingSleep(); observation.cancel(); selected = nil; power.stop(); status = "已取消观测"
     }
 
     func sleepNow() { do { try sleeper.sleepNow() } catch { status = "休眠失败：\(error.localizedDescription)" } }
@@ -113,11 +113,9 @@ final class AppController: ObservableObject {
         let visible = sessions.map { "\($0.id.short):\($0.status.displayName)" }.joined(separator: ",")
         print("CSW_EVENT kind=\(event.kind.rawValue) id=\(event.sessionID.short) project=\(project) visible=[\(visible)]")
 #endif
-        guard event.sessionID == selected else {
-            if waitingAfterTargetStop {
-                let active = await registry.runningSessions().filter { $0.id != selected }
-                if active.isEmpty { waitingAfterTargetStop = false; beginCountdown() }
-            }
+        guard let context = observation.token, selected == context.target else { return }
+        guard event.sessionID == context.target else {
+            await handleNonTargetEvent(context: context)
             return
         }
 
@@ -129,10 +127,34 @@ final class AppController: ObservableObject {
             cancelPendingSleep()
             status = "目标等待授权，保持唤醒"
         case .stopped:
-            let others = await registry.runningSessions().filter { $0.id != selected }
-            if waitForOthers, !others.isEmpty { waitingAfterTargetStop = true; status = "目标已停止，等待其他会话" }
-            else { beginCountdown() }
+            let others = await registry.runningSessions().filter { $0.id != context.target }
+            guard observation.isCurrent(context), selected == context.target else { return }
+            if waitForOthers, !others.isEmpty { beginWaitingForOtherSessions() }
+            else { beginCountdown(context: context) }
         }
+    }
+
+    private func handleNonTargetEvent(context: ObservationToken) async {
+        guard waitingAfterTargetStop || (waitForOthers && countdownTask != nil) else { return }
+        let active = await registry.runningSessions().filter { $0.id != context.target }
+        guard observation.isCurrent(context), selected == context.target else { return }
+
+        if waitingAfterTargetStop {
+            if active.isEmpty {
+                waitingAfterTargetStop = false
+                beginCountdown(context: context)
+            }
+        } else if waitForOthers, countdownTask != nil, !active.isEmpty {
+            beginWaitingForOtherSessions()
+        }
+    }
+
+    private func beginWaitingForOtherSessions() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        countdown = nil
+        waitingAfterTargetStop = true
+        status = "目标已停止，等待其他会话"
     }
 
     private func cancelPendingSleep() {
@@ -142,16 +164,18 @@ final class AppController: ObservableObject {
         waitingAfterTargetStop = false
     }
 
-    private func beginCountdown() {
+    private func beginCountdown(context: ObservationToken) {
+        guard observation.isCurrent(context), selected == context.target else { return }
         countdownTask?.cancel()
         settings.delaySeconds = delaySeconds; settings.waitForOtherSessions = waitForOthers; settings.keepDisplayAwake = keepDisplayAwake
+        let delay = delaySeconds
         countdownTask = Task { [weak self] in
             guard let self else { return }
-            for await value in SleepCountdownController.ticks(seconds: delaySeconds) {
-                if Task.isCancelled { return }
+            for await value in SleepCountdownController.ticks(seconds: delay) {
+                guard !Task.isCancelled, observation.isCurrent(context), selected == context.target else { return }
                 countdown = value; status = "将在 \(value) 秒后休眠"
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, observation.isCurrent(context), selected == context.target else { return }
             power.stop(); sleepNow()
         }
     }

@@ -43,7 +43,9 @@ public struct WatchStateMachine: Sendable {
         }
 
         guard sessionID == target else {
-            if case .waitingForOtherSessions(let targetID) = phase, activeSessions.isEmpty {
+            if settings.waitForOtherSessions, status.isLive, case .countdown(let targetID, _) = phase {
+                phase = .waitingForOtherSessions(targetID)
+            } else if case .waitingForOtherSessions(let targetID) = phase, activeSessions.isEmpty {
                 phase = .countdown(targetID, secondsRemaining: settings.delaySeconds)
             }
             return

@@ -40,7 +40,9 @@ struct CoreTestRunner {
         try waitingOtherSessionDefersCountdown()
         try await registryTreatsWaitingSessionsAsActive()
         try await registryRejectsStaleStop()
-        print("PASS: 25 core tests")
+        try newOtherActivityInterruptsCountdown()
+        try observationFenceRejectsStaleWork()
+        print("PASS: 27 core tests")
     }
 
     static let target = SessionID("target")
@@ -337,5 +339,26 @@ struct CoreTestRunner {
         try expect(!staleStopAccepted, "stale Stop event was accepted")
         let status = await registry.session(id: sessionID)?.status
         try expect(status == .running(turnID: activity.turnID), "stale Stop changed the running state")
+    }
+
+    static func newOtherActivityInterruptsCountdown() throws {
+        var machine = WatchStateMachine(settings: .init(delaySeconds: 30, waitForOtherSessions: true))
+        try machine.reduce(.knownRunningSessions([target]))
+        try machine.reduce(.selectTarget(target))
+        try machine.reduce(.sessionEvent(sessionID: target, status: .idle))
+        try expect(machine.phase == .countdown(target, secondsRemaining: 30), "target Stop did not start countdown")
+        try machine.reduce(.sessionEvent(sessionID: other, status: .waitingOnApproval))
+        try expect(machine.phase == .waitingForOtherSessions(target), "new active session did not interrupt countdown")
+    }
+
+    static func observationFenceRejectsStaleWork() throws {
+        var fence = ObservationFence()
+        let first = fence.select(target)
+        try expect(fence.isCurrent(first), "new observation token was not current")
+        fence.cancel()
+        try expect(!fence.isCurrent(first), "cancel did not invalidate pending observation work")
+        let second = fence.select(other)
+        try expect(!fence.isCurrent(first), "retargeting revalidated the old observation token")
+        try expect(fence.isCurrent(second), "retargeted observation token was not current")
     }
 }
