@@ -25,7 +25,7 @@ public actor SessionRegistry {
 
     @discardableResult
     public func apply(_ event: HookEvent) -> Bool {
-        guard entries[event.sessionID]?.lastHookEventAt ?? .distantPast <= event.receivedAt else { return false }
+        guard entries[event.sessionID]?.lastHookEventAt ?? .distantPast < event.receivedAt else { return false }
         var summary = entries[event.sessionID]?.summary ?? SessionSummary(
             id: event.sessionID, threadID: event.sessionID.rawValue, name: URL(fileURLWithPath: event.cwd).lastPathComponent,
             cwd: event.cwd, updatedAt: event.receivedAt, status: .idle)
@@ -38,6 +38,21 @@ public actor SessionRegistry {
         summary.updatedAt = event.receivedAt
         entries[event.sessionID] = Entry(summary: summary, lastHookEventAt: event.receivedAt)
         return true
+    }
+
+    public func markStaleHookEvents(before cutoff: Date) {
+        for id in Array(entries.keys) {
+            guard var entry = entries[id],
+                  let lastHookEventAt = entry.lastHookEventAt,
+                  lastHookEventAt < cutoff else { continue }
+            if entry.summary.status.isLive {
+                entry.summary.status = .staleActive
+            } else {
+                entry.lastHookEventAt = nil
+                entry.summary.status = .unknown
+            }
+            entries[id] = entry
+        }
     }
 
     public func session(id: SessionID) -> SessionSummary? { entries[id]?.summary }

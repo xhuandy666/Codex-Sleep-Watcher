@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import CodexSleepWatcherCore
 
 enum TestFailure: Error, CustomStringConvertible {
@@ -12,9 +13,30 @@ func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     guard condition() else { throw TestFailure.expected(message) }
 }
 
+final class PIDRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: pid_t?
+
+    func record(_ pid: pid_t) {
+        lock.lock()
+        value = pid
+        lock.unlock()
+    }
+
+    func latest() -> pid_t? {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 @main
 struct CoreTestRunner {
     static func main() async throws {
+        if CommandLine.arguments.contains("--live-app-server") {
+            try await liveAppServerCompatibility()
+            return
+        }
         try onlyTargetStopStartsCountdown()
         try targetRestartCancelsCountdown()
         try waitForOthersDefersCountdown()
@@ -33,6 +55,8 @@ struct CoreTestRunner {
         try await hookReceiverSkipsMalformedDatagrams()
         try concurrentSessionShortIDsAreDistinct()
         try codexLocatorSupportsFinderEnvironment()
+        try codexLocatorSupportsCurrentDesktopLayouts()
+        try codexLocatorPrefersDesktopOverStalePath()
         try await toolHooksRestoreRunningState()
         try targetEventDecisionIsPermissionSafe()
         try permissionWaitDoesNotStartCountdown()
@@ -42,7 +66,22 @@ struct CoreTestRunner {
         try await registryRejectsStaleStop()
         try newOtherActivityInterruptsCountdown()
         try observationFenceRejectsStaleWork()
-        print("PASS: 27 core tests")
+        try await snapshotRestoresPrelaunchActivity()
+        try await snapshotActivityCancelsPendingSleep()
+        try await staleActivityRemainsFailSafeAndCompletedSnapshotIsPruned()
+        try snapshotStoreUsesPrivatePermissions()
+        try await registryRejectsDuplicateEvent()
+        print("Checking App Server short responses")
+        try await appServerReadsShortResponsesWithoutEOF()
+        print("Checking App Server timeout and retry")
+        try await appServerTimesOutAndCanRetry()
+        print("Checking App Server thread/list timeout cleanup")
+        try await appServerThreadListTimeoutKillsOldProcess()
+        print("Checking App Server cancellation cleanup")
+        try await appServerCancellationStopsOldProcess()
+        try await appServerReportsStartupDiagnostic()
+        try await appServerHandlesClosedStderrWithoutBusyLoop()
+        print("PASS: 40 core tests")
     }
 
     static let target = SessionID("target")
@@ -98,6 +137,7 @@ struct CoreTestRunner {
         try expect(SessionStatus.running(turnID: nil).displayName == "运行中", "running label is unclear")
         try expect(SessionStatus.waitingOnApproval.displayName == "等待授权", "approval label is unclear")
         try expect(SessionStatus.waitingOnUserInput.displayName == "等待输入", "input label is unclear")
+        try expect(SessionStatus.staleActive.displayName == "状态待确认", "stale activity label is unclear")
         try expect(SessionStatus.idle.displayName == "本轮已完成", "idle label is unclear")
         try expect(SessionStatus.unknown.displayName == "尚未收到事件", "unknown label is unclear")
     }
@@ -219,8 +259,8 @@ struct CoreTestRunner {
     }
 
     static func concurrentSessionShortIDsAreDistinct() throws {
-        let first = SessionID("019f521b-9a08-7560-9457-f6c6559709ff")
-        let second = SessionID("019f521b-fedd-78b0-b927-a179e0fa6ef0")
+        let first = SessionID("00000000-0000-7000-8000-000000000001")
+        let second = SessionID("00000000-0000-7000-8000-000000000002")
         try expect(first.short != second.short, "concurrent UUIDv7 sessions have colliding short IDs")
     }
 
@@ -231,6 +271,37 @@ struct CoreTestRunner {
             homeDirectory: URL(fileURLWithPath: "/Users/test")
         ) { $0 == chatGPTCodex }
         try expect(result?.path == chatGPTCodex, "Finder environment could not locate the Codex bundled with ChatGPT")
+    }
+
+    static func codexLocatorSupportsCurrentDesktopLayouts() throws {
+        let homeDirectory = URL(fileURLWithPath: "/Users/test")
+        let candidates = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+            "/Users/test/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
+        ]
+        for candidate in candidates {
+            let result = CodexExecutableLocator.locate(
+                environment: ["PATH": "/usr/bin:/bin"], homeDirectory: homeDirectory
+            ) { $0 == candidate }
+            try expect(result?.path == candidate, "Finder could not locate current desktop layout: \(candidate)")
+        }
+    }
+
+    static func codexLocatorPrefersDesktopOverStalePath() throws {
+        let desktopCLI = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+        let standaloneCLI = "/opt/homebrew/bin/codex"
+        let result = CodexExecutableLocator.locate(
+            environment: ["PATH": "/opt/homebrew/bin:/usr/bin:/bin"],
+            homeDirectory: URL(fileURLWithPath: "/Users/test")
+        ) { $0 == desktopCLI || $0 == standaloneCLI }
+        try expect(result?.path == desktopCLI, "stale PATH CLI took precedence over the desktop runtime")
+        let fallback = CodexExecutableLocator.locate(
+            environment: ["PATH": "/opt/homebrew/bin:/usr/bin:/bin"],
+            homeDirectory: URL(fileURLWithPath: "/Users/test")
+        ) { $0 == standaloneCLI }
+        try expect(fallback?.path == standaloneCLI, "standalone CLI fallback was lost")
     }
 
     static func toolHooksRestoreRunningState() async throws {
@@ -360,5 +431,354 @@ struct CoreTestRunner {
         let second = fence.select(other)
         try expect(!fence.isCurrent(first), "retargeting revalidated the old observation token")
         try expect(fence.isCurrent(second), "retargeted observation token was not current")
+    }
+
+    static func snapshotRestoresPrelaunchActivity() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HookEventSnapshotStore(directory: root)
+        let sessionID = SessionID("prelaunch")
+        let activity = HookEvent(
+            kind: .userPromptSubmit,
+            sessionID: sessionID,
+            turnID: TurnID("turn"),
+            cwd: "/repo/prelaunch",
+            receivedAt: Date(timeIntervalSince1970: 20)
+        )
+        try store.record(activity)
+        try store.record(HookEvent(
+            kind: .stop,
+            sessionID: sessionID,
+            turnID: activity.turnID,
+            cwd: activity.cwd,
+            receivedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        let registry = SessionRegistry()
+        await registry.refresh(from: [SessionSummary(
+            id: sessionID,
+            threadID: "thread-prelaunch",
+            name: "Existing task",
+            cwd: activity.cwd,
+            updatedAt: activity.receivedAt,
+            status: .unknown
+        )])
+        for event in try store.latestEvents() { await registry.apply(event) }
+        let status = await registry.session(id: sessionID)?.status
+        try expect(status == .running(turnID: activity.turnID), "startup snapshot did not restore the pre-existing active task")
+
+        let stop = HookEvent(
+            kind: .stop,
+            sessionID: sessionID,
+            turnID: activity.turnID,
+            cwd: activity.cwd,
+            receivedAt: Date(timeIntervalSince1970: 30)
+        )
+        try store.record(stop)
+        let latest = try store.latestEvents()
+        try expect(latest == [stop], "snapshot store did not keep the newest event per session")
+    }
+
+    static func registryRejectsDuplicateEvent() async throws {
+        let registry = SessionRegistry()
+        let event = HookEvent(
+            kind: .userPromptSubmit,
+            sessionID: SessionID("duplicate"),
+            turnID: TurnID("turn"),
+            cwd: "/repo",
+            receivedAt: Date(timeIntervalSince1970: 10)
+        )
+        let firstAccepted = await registry.apply(event)
+        let duplicateAccepted = await registry.apply(event)
+        try expect(firstAccepted, "first event was rejected")
+        try expect(!duplicateAccepted, "duplicate persisted event was accepted twice")
+    }
+
+    static func staleActivityRemainsFailSafeAndCompletedSnapshotIsPruned() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HookEventSnapshotStore(directory: root)
+        let activity = HookEvent(
+            kind: .userPromptSubmit,
+            sessionID: SessionID("stale-active"),
+            turnID: TurnID("turn"),
+            cwd: "/repo/stale-active",
+            receivedAt: Date(timeIntervalSince1970: 10)
+        )
+        let completed = HookEvent(
+            kind: .stop,
+            sessionID: SessionID("completed"),
+            turnID: TurnID("turn"),
+            cwd: "/repo/completed",
+            receivedAt: Date(timeIntervalSince1970: 10)
+        )
+        try store.record(activity)
+        try store.record(completed)
+        let registry = SessionRegistry()
+        await registry.apply(activity)
+
+        let cutoff = Date(timeIntervalSince1970: 20)
+        try store.pruneCompletedEvents(before: cutoff)
+        await registry.markStaleHookEvents(before: cutoff)
+        let remaining = try store.latestEvents()
+        let status = await registry.session(id: activity.sessionID)?.status
+        let active = await registry.runningSessions()
+        let jsonFiles = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        try expect(remaining == [activity] && jsonFiles.count == 1, "old completed snapshot was not pruned safely")
+        try expect(status == .staleActive, "old active Hook state was not marked uncertain")
+        try expect(active.map(\.id).contains(activity.sessionID), "uncertain active state stopped blocking automatic sleep")
+    }
+
+    static func snapshotActivityCancelsPendingSleep() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HookEventSnapshotStore(directory: root)
+        var machine = WatchStateMachine()
+        try machine.reduce(.knownRunningSessions([target]))
+        try machine.reduce(.selectTarget(target))
+        try machine.reduce(.sessionEvent(sessionID: target, status: .idle))
+        try expect(machine.phase == .countdown(target, secondsRemaining: 30), "test countdown did not start")
+
+        try store.record(HookEvent(
+            kind: .userPromptSubmit,
+            sessionID: target,
+            turnID: TurnID("restored-turn"),
+            cwd: "/repo/target",
+            receivedAt: Date()
+        ))
+        let registry = SessionRegistry()
+        for event in try store.latestEvents() where await registry.apply(event) {
+            guard let status = await registry.session(id: event.sessionID)?.status else { continue }
+            try machine.reduce(.sessionEvent(sessionID: event.sessionID, status: status))
+        }
+        try expect(machine.phase == .monitoring(target), "snapshot-only activity did not cancel pending sleep")
+    }
+
+    static func snapshotStoreUsesPrivatePermissions() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HookEventSnapshotStore(directory: root)
+        try store.record(HookEvent(
+            kind: .sessionStart,
+            sessionID: SessionID("private"),
+            turnID: nil,
+            cwd: "/repo/private",
+            receivedAt: Date()
+        ))
+
+        let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        guard let snapshot = files.first(where: { $0.pathExtension == "json" }) else {
+            throw TestFailure.expected("snapshot file was not created")
+        }
+        let directoryMode = try posixMode(at: root)
+        let lockMode = try posixMode(at: root.appendingPathComponent(".lock"))
+        let snapshotMode = try posixMode(at: snapshot)
+        try expect(directoryMode == 0o700, "snapshot directory is not private")
+        try expect(lockMode == 0o600, "snapshot lock is not private")
+        try expect(snapshotMode == 0o600, "snapshot file is not private")
+    }
+
+    static func appServerReadsShortResponsesWithoutEOF() async throws {
+        let executable = try makeFakeAppServer(initializeResponds: true)
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let client = AppServerClient(executableURL: executable, responseTimeout: 2)
+        let startedAt = Date()
+        let response = try await client.listThreads()
+        let elapsed = Date().timeIntervalSince(startedAt)
+        await client.stop()
+        try expect(elapsed < 1.5, "short App Server responses waited for the pipe to close")
+        try expect(response.data.first?.sessionId == "existing-session", "fake App Server response was not decoded")
+    }
+
+    static func appServerTimesOutAndCanRetry() async throws {
+        let executable = try makeFakeAppServer(initializeResponds: false)
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let recorder = PIDRecorder()
+        let client = AppServerClient(
+            executableURL: executable,
+            responseTimeout: 0.2,
+            processLaunchHandler: recorder.record
+        )
+        let startedAt = Date()
+        do {
+            try await client.start()
+            throw TestFailure.expected("unresponsive App Server did not time out")
+        } catch AppServerClientError.timedOut {
+            try expect(Date().timeIntervalSince(startedAt) < 1.5, "App Server timeout did not return promptly")
+        }
+        let oldPID = try await fakeServerPID(from: recorder)
+        try expect(!processIsAlive(oldPID), "timed-out App Server process survived initialization retry cleanup")
+        try writeFakeAppServer(at: executable, initializeResponds: true)
+        let response = try await client.listThreads()
+        await client.stop()
+        try expect(response.data.first?.sessionId == "existing-session", "App Server could not retry after a timeout")
+    }
+
+    static func appServerThreadListTimeoutKillsOldProcess() async throws {
+        let executable = try makeFakeAppServer(
+            initializeResponds: true,
+            threadListResponds: false,
+            ignoresTermination: true
+        )
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let recorder = PIDRecorder()
+        let client = AppServerClient(
+            executableURL: executable,
+            responseTimeout: 0.2,
+            processLaunchHandler: recorder.record
+        )
+        do {
+            _ = try await client.listThreads()
+            throw TestFailure.expected("unresponsive thread/list did not time out")
+        } catch AppServerClientError.timedOut {}
+
+        let oldPID = try await fakeServerPID(from: recorder)
+        try expect(!processIsAlive(oldPID), "SIGTERM-resistant App Server survived the kill fallback")
+        try writeFakeAppServer(at: executable, initializeResponds: true)
+        let response = try await client.listThreads()
+        await client.stop()
+        try expect(response.data.first?.sessionId == "existing-session", "thread/list timeout prevented a clean retry")
+    }
+
+    static func appServerCancellationStopsOldProcess() async throws {
+        let executable = try makeFakeAppServer(initializeResponds: false, ignoresTermination: true)
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let recorder = PIDRecorder()
+        let client = AppServerClient(
+            executableURL: executable,
+            responseTimeout: 5,
+            processLaunchHandler: recorder.record
+        )
+        let task = Task { try await client.start() }
+        let pid = try await fakeServerPID(from: recorder)
+        let cancelledAt = Date()
+        task.cancel()
+        do {
+            try await task.value
+            throw TestFailure.expected("cancelled App Server read returned successfully")
+        } catch is CancellationError {}
+        try expect(Date().timeIntervalSince(cancelledAt) < 1.5, "App Server read ignored task cancellation")
+        try expect(!processIsAlive(pid), "cancelled App Server process survived cleanup")
+    }
+
+    static func appServerReportsStartupDiagnostic() async throws {
+        let executable = try makeFakeAppServer(initializeResponds: false)
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let script = """
+        #!/bin/sh
+        printf '%s\\n' 'error: incompatible app-server option' >&2
+        exit 2
+        """
+        try Data(script.utf8).write(to: executable)
+        let client = AppServerClient(executableURL: executable, responseTimeout: 2)
+        do {
+            try await client.start()
+            throw TestFailure.expected("exiting App Server did not report a startup failure")
+        } catch AppServerClientError.serverExited(_, let diagnostic) {
+            try expect(diagnostic.contains("incompatible app-server option"), "startup stderr was discarded")
+        }
+    }
+
+    static func liveAppServerCompatibility() async throws {
+        guard let executable = CodexExecutableLocator.locate() else {
+            throw TestFailure.expected("installed desktop Codex CLI was not found")
+        }
+        let client = AppServerClient()
+        do {
+            let first = try await client.listThreads()
+            let second = try await client.listThreads()
+            let sessions = SessionDiscoveryService.mapRecentThreads(second.data)
+            await client.stop()
+            print("PASS: live App Server initialization and two thread/list requests")
+            print("Runtime: \(executable.path)")
+            print("Decoded threads: \(first.data.count), refreshed: \(second.data.count), visible sessions: \(sessions.count)")
+        } catch {
+            await client.stop()
+            throw error
+        }
+    }
+
+    static func appServerHandlesClosedStderrWithoutBusyLoop() async throws {
+        let executable = try makeFakeAppServer(initializeResponds: true)
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        let script = try String(contentsOf: executable, encoding: .utf8)
+            .replacingOccurrences(of: "#!/bin/sh\n", with: "#!/bin/sh\nexec 2>&-\n/bin/sleep 0.4\n")
+        try Data(script.utf8).write(to: executable)
+        let client = AppServerClient(executableURL: executable, responseTimeout: 2)
+        var before = rusage(), after = rusage()
+        getrusage(RUSAGE_SELF, &before)
+        _ = try await client.listThreads()
+        getrusage(RUSAGE_SELF, &after)
+        await client.stop()
+        func cpuSeconds(_ usage: rusage) -> Double {
+            Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+        }
+        try expect(cpuSeconds(after) - cpuSeconds(before) < 0.2, "closed stderr caused a busy poll loop")
+    }
+
+    static func makeFakeAppServer(
+        initializeResponds: Bool,
+        threadListResponds: Bool = true,
+        ignoresTermination: Bool = false
+    ) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("fake-codex")
+        try writeFakeAppServer(
+            at: executable,
+            initializeResponds: initializeResponds,
+            threadListResponds: threadListResponds,
+            ignoresTermination: ignoresTermination
+        )
+        return executable
+    }
+
+    static func writeFakeAppServer(
+        at executable: URL,
+        initializeResponds: Bool,
+        threadListResponds: Bool = true,
+        ignoresTermination: Bool = false
+    ) throws {
+        let initializeCase = initializeResponds
+            ? #"*'"id":0'*) printf '%s\n' '{"id":0,"result":{}}' ;;"#
+            : #"*'"id":0'*) : ;;"#
+        let threadListCase = threadListResponds
+            ? #"*thread*list*) printf '%s\n' '{"id":1,"result":{"data":[{"id":"thread-existing","sessionId":"existing-session","name":"Existing","cwd":"/repo","updatedAt":1,"status":{"type":"notLoaded"}}],"nextCursor":null}}' ;;"#
+            : #"*thread*list*) : ;;"#
+        let terminationTrap = ignoresTermination ? "trap '' TERM" : ":"
+        let script = """
+        #!/bin/sh
+        \(terminationTrap)
+        while IFS= read -r line; do
+          case "$line" in
+            \(initializeCase)
+            \(threadListCase)
+          esac
+        done
+        """
+        try Data(script.utf8).write(to: executable)
+        chmod(executable.path, S_IRUSR | S_IWUSR | S_IXUSR)
+    }
+
+    static func fakeServerPID(from recorder: PIDRecorder) async throws -> pid_t {
+        for _ in 0..<100 {
+            if let pid = recorder.latest() { return pid }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw TestFailure.expected("fake App Server launch was not observed")
+    }
+
+    static func processIsAlive(_ pid: pid_t) -> Bool {
+        Darwin.kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    static func posixMode(at url: URL) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let permissions = attributes[.posixPermissions] as? NSNumber else {
+            throw TestFailure.expected("POSIX mode was unavailable for \(url.lastPathComponent)")
+        }
+        return permissions.intValue & 0o777
     }
 }

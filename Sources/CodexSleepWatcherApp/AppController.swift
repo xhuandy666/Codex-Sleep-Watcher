@@ -16,6 +16,7 @@ final class AppController: ObservableObject {
     private let appServer = AppServerClient()
     private let registry = SessionRegistry()
     private let receiver = HookEventReceiver()
+    private let snapshots = HookEventSnapshotStore()
     private let power = PowerAssertionController()
     private let sleeper: any SystemSleeping
     private var eventTask: Task<Void, Never>?
@@ -41,27 +42,37 @@ final class AppController: ObservableObject {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
+        status = "正在恢复已有会话"
         do {
             let stream = try receiver.events()
             eventTask = Task { [weak self] in for await event in stream { await self?.handle(event) } }
-            try await appServer.start()
-            status = "请选择一个运行中的会话"
-            await refresh()
         } catch {
             hasStarted = false
-            eventTask?.cancel()
-            eventTask = nil
             status = "初始化失败：\(error.localizedDescription)"
+            return
         }
+
+        let restored = await replayPersistedEvents()
+        status = restored > 0 ? "已恢复已有会话，正在同步 Codex" : "正在连接 Codex"
+        await refresh()
     }
 
     func refresh() async {
+        _ = await replayPersistedEvents()
         do {
             let response = try await appServer.listThreads()
             let recent = SessionDiscoveryService.mapRecentThreads(response.data)
             await registry.refresh(from: recent, preserving: selected)
+            _ = await replayPersistedEvents(updatePublishedSessions: false)
             sessions = await registry.sessions()
-        } catch { status = "读取会话失败：\(error.localizedDescription)" }
+            if selected == nil {
+                status = sessions.isEmpty ? "没有找到最近的 Codex 会话" : "请选择一个运行中的会话"
+            }
+        } catch {
+            status = sessions.isEmpty
+                ? "读取会话失败：\(error.localizedDescription)"
+                : "已恢复 Hook 会话；Codex 列表同步失败：\(error.localizedDescription)"
+        }
     }
 
     func installHooks() {
@@ -107,7 +118,12 @@ final class AppController: ObservableObject {
 #endif
             return
         }
+        await processAcceptedEvent(event)
+    }
+
+    private func processAcceptedEvent(_ event: HookEvent) async {
         sessions = await registry.sessions()
+        if selected == nil { status = "请选择一个运行中的会话" }
 #if DEBUG
         let project = URL(fileURLWithPath: event.cwd).lastPathComponent
         let visible = sessions.map { "\($0.id.short):\($0.status.displayName)" }.joined(separator: ",")
@@ -132,6 +148,21 @@ final class AppController: ObservableObject {
             if waitForOthers, !others.isEmpty { beginWaitingForOtherSessions() }
             else { beginCountdown(context: context) }
         }
+    }
+
+    @discardableResult
+    private func replayPersistedEvents(updatePublishedSessions: Bool = true) async -> Int {
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        try? snapshots.pruneCompletedEvents(before: cutoff)
+        guard let events = try? snapshots.latestEvents() else { return 0 }
+        var acceptedCount = 0
+        for event in events where await registry.apply(event) {
+            acceptedCount += 1
+            await processAcceptedEvent(event)
+        }
+        await registry.markStaleHookEvents(before: cutoff)
+        if updatePublishedSessions { sessions = await registry.sessions() }
+        return acceptedCount
     }
 
     private func handleNonTargetEvent(context: ObservationToken) async {

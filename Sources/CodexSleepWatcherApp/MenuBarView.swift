@@ -62,7 +62,7 @@ struct MenuBarView: View {
                     .padding(.vertical, 2)
                 }
                 .frame(maxHeight: 320)
-                Text("“尚未收到事件”表示该会话还没有触发 Sleep Watcher Hooks")
+                Text("“尚未收到事件”表示尚无 Hook；“状态待确认”会继续阻止自动休眠")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -162,6 +162,7 @@ struct MenuBarView: View {
         switch status {
         case .running: .green
         case .waitingOnApproval, .waitingOnUserInput: .orange
+        case .staleActive: .yellow
         case .idle: .blue
         case .unknown: .secondary
         }

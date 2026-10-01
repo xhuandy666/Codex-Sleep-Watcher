@@ -18,6 +18,7 @@ public enum SessionStatus: Equatable, Sendable {
     case running(turnID: TurnID?)
     case waitingOnApproval
     case waitingOnUserInput
+    case staleActive
     case idle
     case unknown
 
@@ -33,6 +34,7 @@ public enum SessionStatus: Equatable, Sendable {
         case .running: "运行中"
         case .waitingOnApproval: "等待授权"
         case .waitingOnUserInput: "等待输入"
+        case .staleActive: "状态待确认"
         case .idle: "本轮已完成"
         case .unknown: "尚未收到事件"
         }
@@ -40,7 +42,7 @@ public enum SessionStatus: Equatable, Sendable {
 
     public var isLive: Bool {
         switch self {
-        case .running, .waitingOnApproval, .waitingOnUserInput: true
+        case .running, .waitingOnApproval, .waitingOnUserInput, .staleActive: true
         case .idle, .unknown: false
         }
     }
